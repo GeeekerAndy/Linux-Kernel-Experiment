@@ -242,7 +242,7 @@ int main(int argc, char **argv) {
         printf("Usage:\n"
             "./a.out -a   print the current time every second.\n"
             "./a.out -b   print the current time, accurate to microseconds.\n"
-            "./a.out -c   print the time of calculating fibonacci:\n");
+            "./a.out -c arg1 arg2 arg3  print the time of calculating fibonacci:\n");
         return 0;
     }   
 }
