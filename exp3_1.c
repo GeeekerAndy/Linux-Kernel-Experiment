@@ -7,7 +7,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-static char tmbuf[64];
+static char tmbuf[64]; //存储当前时间的字符串变量
+
+static void currentsig_real(int signum); //全局计时器中断处理
 
 static void psig_real(int signum); //父进程的三个定时中断处理函数
 static void psig_virtual(int signum);
@@ -25,22 +27,27 @@ static void c2sig_prof(int signum);
 static time_t p_real_secs = 0, c1_real_secs = 0, c2_real_secs = 0;
 static time_t p_virtual_secs = 0, c1_virtual_secs = 0, c2_virtual_secs = 0;
 static time_t p_prof_secs = 0, c1_prof_secs = 0, c2_prof_secs = 0;
+static time_t p_real_usecs = 0; //微秒
 
-//记录定时的微秒的变量
-static time_t p_real_usecs = 0;
+//记录全局定时的秒数/微秒的变量
+static time_t current_real_secs = 0;
+static time_t current_real_usecs = 0;
+//记录全局定时秒数/微秒的结构变量
+static struct itimerval current_realt;
 
 //记录3种定时的毫秒秒数的结构变量
 static struct itimerval p_realt, c1_realt, c2_realt;
 static struct itimerval p_virtt, c1_virtt, c2_virtt;
 static struct itimerval p_proft, c1_proft, c2_proft;
 
-static void psig_real(int signum) {
-    ++p_real_secs;    
-    strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", localtime(&p_real_secs));
-    // printf("%s.%06ld\n", tmbuf, p_real_usecs);
+static void currentsig_real(int signum) {
+    current_real_secs += 1;
+    getitimer(ITIMER_REAL, &current_realt);
+    strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", localtime(&current_real_secs));
     printf("%s\n", tmbuf);
 }
-static void psig_real_spc(int signum) {
+
+static void psig_real(int signum) {
     p_real_secs += 10;
 }
 static void psig_virtual(int signum) {
@@ -85,36 +92,40 @@ long unsigned int fibonacci(unsigned int n) {
     return fibonacci(n-1) + fibonacci(n-2);
 }
 
+struct timeval mygettimeofday(struct timeval tv, struct timezone *tz) {
+    //设置信号
+    signal(SIGALRM, currentsig_real);
+    current_realt.it_interval.tv_sec = 0;
+    current_realt.it_interval.tv_usec = 999999;
+    current_realt.it_value.tv_sec = 0;
+    current_realt.it_value.tv_usec = 999999;
+    setitimer(ITIMER_REAL, &current_realt, NULL);
+    getitimer(ITIMER_REAL, &current_realt);
+    tv.tv_sec = current_real_secs + 9 - current_realt.it_value.tv_sec;
+    tv.tv_usec = 999999 - current_realt.it_value.tv_usec;
+    return tv;
+}
+
 
 int main(int argc, char **argv) {
+    gettimeofday(&current_realt.it_value, NULL);
+    current_real_secs = current_realt.it_value.tv_sec;
     if(argv[1][0] == '-' && argv[1][1] == 'a') {
-        //获取系统当前时间
-        gettimeofday(&p_realt.it_value, NULL);
-        p_real_secs = p_realt.it_value.tv_sec;
-        p_real_usecs = p_realt.it_value.tv_usec;
-
-        //设置信号
-        signal(SIGALRM, psig_real);
-        //初始化父进程3种定时器
-        p_realt.it_interval.tv_sec = 0;
-        p_realt.it_interval.tv_usec = 999999;
-        p_realt.it_value.tv_sec = 0;
-        p_realt.it_value.tv_usec = 999999;
-
-        setitimer(ITIMER_REAL, &p_realt, NULL);
-        while(1);
+        p_realt.it_value = mygettimeofday(p_realt.it_value, NULL);
+        while(1);        
     } else if(argv[1][0] == '-' && argv[1][1] == 'b') {
+        p_realt.it_value = mygettimeofday(p_realt.it_value, NULL);        
         while(1) {
-            gettimeofday(&p_realt.it_value, NULL);
-            p_real_secs = p_realt.it_value.tv_sec;
-            p_real_usecs = p_realt.it_value.tv_usec;
+            getitimer(ITIMER_REAL, &current_realt);
+            p_real_secs = current_real_secs - current_realt.it_value.tv_sec;
+            p_real_usecs = 999999 - current_realt.it_value.tv_usec;
             strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", localtime(&p_real_secs));
             printf("%s.%06ld\n", tmbuf, p_real_usecs);
             int i;
             for(i = 1000000000; i >0; i--) {
 
             }
-        }        
+        }
     } else if(argv[1][0] == '-' && argv[1][1] == 'c') {
         int pid1, pid2;
         // unsigned int arg1 = argv[1][2];
@@ -125,7 +136,7 @@ int main(int argc, char **argv) {
         long unsigned int fib3 = 0;
         int status;
 
-        signal(SIGALRM, psig_real_spc);
+        signal(SIGALRM, psig_real);
         signal(SIGVTALRM, psig_virtual);
         signal(SIGPROF, psig_prof);
         p_realt.it_interval.tv_sec = 9;
@@ -242,13 +253,8 @@ int main(int argc, char **argv) {
                     p_prof_secs + 9 - p_proft.it_value.tv_sec,
                     (999999 - p_proft.it_value.tv_usec)/1000);                  
             waitpid(pid1, &status, 0);
-            waitpid(pid2, &status, 0);           
-        }
-    } else {
-        printf("Usage:\n"
-            "./a.out -a   print the current time every second.\n"
-            "./a.out -b   print the current time, accurate to microseconds.\n"
-            "./a.out -c arg1 arg2 arg3  print the time of calculating fibonacci:\n");
-        return 0;
-    }   
+            waitpid(pid2, &status, 0);         
+        }  
+    } 
+
 }
